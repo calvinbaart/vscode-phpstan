@@ -9,8 +9,7 @@
 
 ## What is this?
 
-[PHPStan](https://github.com/phpstan/phpstan) is a static analysis tool for PHP. This extension aims to use the output of PHPStan and integrate it in VSCode allowing the
-developer to find errors quicker.
+[PHPStan](https://github.com/phpstan/phpstan) is a static analysis tool for PHP. This extension integrates the output of PHPStan in VSCode allowing the developer to find errors quicker.
 
 ## Installation
 
