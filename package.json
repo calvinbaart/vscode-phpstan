@@ -2,7 +2,7 @@
     "name": "vscode-phpstan",
     "displayName": "vscode-phpstan",
     "description": "PHPStan support in VSCode",
-    "version": "0.0.8",
+    "version": "0.0.9",
     "publisher": "Calsmurf2904",
     "engines": {
         "vscode": "^1.19.0"
@@ -13,6 +13,10 @@
     "activationEvents": [
         "onLanguage:php"
     ],
+    "repository": {
+        "type": "github",
+        "url": "https://github.com/calvinbaart/vscode-phpstan"
+    },
     "main": "./out/extension",
     "scripts": {
         "vscode:prepublish": "npm run compile",
