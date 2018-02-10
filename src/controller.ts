@@ -18,7 +18,7 @@ export class PHPStanController
 
         // Get the current text editor
         let editor = window.activeTextEditor;
-        if (editor) {
+        if (editor && editor.document) {
             this._phpstan.updateDocument(editor.document);
         }
 

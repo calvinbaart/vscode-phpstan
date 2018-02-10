@@ -2,6 +2,11 @@
 [![](https://vsmarketplacebadge.apphb.com/installs-short/calsmurf2904.vscode-phpstan.svg)](https://marketplace.visualstudio.com/items?itemName=calsmurf2904.vscode-phpstan)
 [![](https://vsmarketplacebadge.apphb.com/rating-short/calsmurf2904.vscode-phpstan.svg)](https://marketplace.visualstudio.com/items?itemName=calsmurf2904.vscode-phpstan)
 
+<p align="center">
+  <br />
+  <img src="https://puu.sh/zkXAe/e727a924d6.png" alt="Image Sample" />
+</p>
+
 ## What is this?
 
 [PHPStan](https://github.com/phpstan/phpstan) is a static analysis tool for PHP. This extension aims to use the output of PHPStan and integrate it in VSCode allowing the

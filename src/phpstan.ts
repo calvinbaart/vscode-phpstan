@@ -125,12 +125,16 @@ export class PHPStan
 
         let autoload = "";
 
-        const workspacefolder = workspace.getWorkspaceFolder(doc.uri).uri.fsPath;
-        const autoloadfile = path.join(workspacefolder, "vendor/autoload.php");
+        const workspaceFolder = workspace.getWorkspaceFolder(doc.uri);
 
-        if (fs.existsSync(autoloadfile)) {
-            autoload = `--autoload-file=${autoloadfile}`;
-        }
+        if (workspaceFolder) {
+            const workspacefolderPath = workspaceFolder.uri.fsPath;
+            const autoloadfile = path.join(workspacefolderPath, "vendor/autoload.php");
+
+            if (fs.existsSync(autoloadfile)) {
+                autoload = `--autoload-file=${autoloadfile}`;
+            }
+        }    
 
         this._current[doc.fileName] = child_process.spawn(this._binaryPath, [
             "analyse",
@@ -172,8 +176,13 @@ export class PHPStan
                 .filter(x => x.length > 0)
                 .map(x => x.split(":"))
                 .map(x => {
-                    const line = Number(x[0]);
+                    let line = Number(x[0]);
                     x.shift();
+
+                    // line 0 is not allowed so we need to start at 1
+                    if (line === 0) {
+                        line++;
+                    }
 
                     const error = x.join(":");
                     return {
