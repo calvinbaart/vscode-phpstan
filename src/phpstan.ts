@@ -11,26 +11,53 @@ interface IResultData
     results: ICheckResult[]
 }
 
+interface IExtensionConfig
+{
+    path: string | null;
+    level: string;
+    memoryLimit: string;
+    options: string[],
+    enabled: boolean
+}    
+
 export class PHPStan
 {
     private _current: { [key: string]: child_process.ChildProcess };
     private _results: { [key: string]: IResultData };
     private _filename: string;
-    private _binaryPath: string;
+    private _binaryPath: string | null;
+    private _level: string;
+    private _memoryLimit: string;
+    private _customOptions: string[];
+    private _enabled: boolean;
     private _diagnosticCollection: DiagnosticCollection;
 
-    constructor()
+    constructor(config: IExtensionConfig)
     {
         this._current = {};
         this._results = {};
         this._filename = null;
-        this._binaryPath = "";
+        this._binaryPath = config.path;
+        this._level = config.level;
+        this._memoryLimit = config.memoryLimit;
+        this._customOptions = config.options;
+        this._enabled = config.enabled;
         this._diagnosticCollection = languages.createDiagnosticCollection("error");
 
-        this.findPHPStan();
+        if (this._binaryPath !== null && !fs.existsSync(this._binaryPath)) {
+            window.showErrorMessage("Failed to find phpstan, the given path doesn't exist.");
 
-        if (this._binaryPath.length === 0) {
-            window.showErrorMessage("Failed to find phpstan, phpstan will be disabled for this session.");
+            this._binaryPath = null;
+        } else {
+            if (this._binaryPath === null) {
+                this.findPHPStan();
+            }
+
+            if (this._enabled) {
+                if (this._binaryPath === null) {
+                    window.showErrorMessage("Failed to find phpstan, phpstan will be disabled for this session.");
+                }
+            }
         }
     }
 
@@ -63,7 +90,7 @@ export class PHPStan
 
     public updateDocument(doc: TextDocument)
     {
-        if (this._binaryPath.length === 0) {
+        if (this._binaryPath === null || !this._enabled) {
             return;
         }
 
@@ -102,10 +129,18 @@ export class PHPStan
         const autoloadfile = path.join(workspacefolder, "vendor/autoload.php");
 
         if (fs.existsSync(autoloadfile)) {
-            autoload = "--autoload-file=" + autoloadfile;
+            autoload = `--autoload-file=${autoloadfile}`;
         }
 
-        this._current[doc.fileName] = child_process.spawn(this._binaryPath, ["analyse", "-l", "4", autoload, "--errorFormat=raw", "--memory-limit=2048M", doc.fileName]);
+        this._current[doc.fileName] = child_process.spawn(this._binaryPath, [
+            "analyse",
+            `--level=${this._level}`,
+            autoload,
+            "--errorFormat=raw",
+            `--memory-limit=${this._memoryLimit}`,
+            ...this._customOptions,
+            doc.fileName
+        ]);
         this._filename = doc.fileName;
 
         let results: string = "";
@@ -115,6 +150,14 @@ export class PHPStan
             }
 
             results += data;
+        });
+
+        this._current[doc.fileName].on("error", (err) => {
+            if (err.message.indexOf("ENOENT") !== -1) {
+                window.showErrorMessage("Failed to find phpstan, the given path doesn't exist.");
+
+                this._binaryPath = null;
+            }
         });
 
         this._current[doc.fileName].on('exit', (code) => {
@@ -177,5 +220,59 @@ export class PHPStan
     get diagnosticCollection()
     {
         return this._diagnosticCollection;
+    }
+
+    set enabled(val: boolean)
+    {
+        this._enabled = val;
+
+        if (this._enabled) {
+            if (this._binaryPath === null) {
+                window.showErrorMessage("Failed to find phpstan, phpstan will be disabled for this session.");
+            }
+        }
+    }
+
+    set path(val: string)
+    {
+        this._binaryPath = val;
+
+        // Reset in-memory cached results
+        this._results = {};
+
+        if (this._binaryPath === null) {
+            this.findPHPStan();
+        }
+
+        if (this._binaryPath === null) {
+            window.showErrorMessage("Failed to find phpstan, phpstan will be disabled.");
+        }
+
+        if (val !== null && !fs.existsSync(this._binaryPath)) {
+            window.showErrorMessage("Failed to find phpstan, the given path doesn't exist.");
+
+            this._binaryPath = null;
+        }
+    }
+
+    set level(val: string)
+    {
+        this._level = val;
+
+        // Reset in-memory cached results
+        this._results = {};
+    }
+
+    set memoryLimit(val: string)
+    {
+        this._memoryLimit = val;
+    }
+
+    set options(val: string[])
+    {
+        this._customOptions = val;
+
+        // Reset in-memory cached results
+        this._results = {};
     }
 }

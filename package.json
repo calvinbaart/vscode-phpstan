@@ -2,7 +2,7 @@
     "name": "vscode-phpstan",
     "displayName": "vscode-phpstan",
     "description": "PHPStan support in VSCode",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "publisher": "Calsmurf2904",
     "engines": {
         "vscode": "^1.19.0"
@@ -30,5 +30,40 @@
         "vscode": "^1.1.6",
         "@types/node": "^7.0.43",
         "@types/mocha": "^2.2.42"
+    },
+    "contributes": {
+        "configuration": [
+            {
+                "type": "object",
+                "title": "PHPStan configuration",
+                "properties": {
+                    "phpstan.enabled": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Enable PHPStan"
+                    },
+                    "phpstan.level": {
+                        "type": "string",
+                        "default": "max",
+                        "description": "Sets the strictness level of PHPStan"
+                    },
+                    "phpstan.path": {
+                        "type": "string",
+                        "default": null,
+                        "description": "Override the path to PHPStan"
+                    },
+                    "phpstan.memoryLimit": {
+                        "type": "string",
+                        "default": "2048M",
+                        "description": "Sets the memory limit of PHPStan"
+                    },
+                    "phpstan.options": {
+                        "type": "array",
+                        "default": [],
+                        "description": "Extra commandline options to be passed to PHPStan"
+                    }
+                }
+            }
+        ]
     }
 }
