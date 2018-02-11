@@ -2,7 +2,7 @@ import { ICheckResult, handleDiagnosticErrors } from "./utils";
 import * as child_process from "child_process";
 import * as path from "path";
 import * as fs from "fs";
-import { workspace, window, TextDocument, languages, DiagnosticCollection } from "vscode";
+import { workspace, window, TextDocument, languages, DiagnosticCollection, StatusBarItem, StatusBarAlignment } from "vscode";
 import { createHash } from "crypto";
 
 interface IResultData
@@ -17,32 +17,29 @@ interface IExtensionConfig
     level: string;
     memoryLimit: string;
     options: string[],
-    enabled: boolean
+    enabled: boolean,
+    projectFile: string
 }    
 
 export class PHPStan
 {
     private _current: { [key: string]: child_process.ChildProcess };
     private _results: { [key: string]: IResultData };
-    private _filename: string;
     private _binaryPath: string | null;
-    private _level: string;
-    private _memoryLimit: string;
-    private _customOptions: string[];
-    private _enabled: boolean;
+    private _config: IExtensionConfig;
     private _diagnosticCollection: DiagnosticCollection;
+    private _statusBarItem: StatusBarItem;
+    private _numActive: number;
 
     constructor(config: IExtensionConfig)
     {
         this._current = {};
         this._results = {};
-        this._filename = null;
         this._binaryPath = config.path;
-        this._level = config.level;
-        this._memoryLimit = config.memoryLimit;
-        this._customOptions = config.options;
-        this._enabled = config.enabled;
+        this._config = config;
         this._diagnosticCollection = languages.createDiagnosticCollection("error");
+        this._statusBarItem = window.createStatusBarItem(StatusBarAlignment.Left);
+        this._numActive = 0;
 
         if (this._binaryPath !== null && !fs.existsSync(this._binaryPath)) {
             window.showErrorMessage("Failed to find phpstan, the given path doesn't exist.");
@@ -53,7 +50,7 @@ export class PHPStan
                 this.findPHPStan();
             }
 
-            if (this._enabled) {
+            if (this._config.enabled) {
                 if (this._binaryPath === null) {
                     window.showErrorMessage("Failed to find phpstan, phpstan will be disabled for this session.");
                 }
@@ -90,11 +87,13 @@ export class PHPStan
 
     public updateDocument(doc: TextDocument)
     {
-        if (this._binaryPath === null || !this._enabled) {
+        if (this._binaryPath === null || !this._config.enabled) {
+            this.hideStatusBar();
             return;
         }
 
         if (doc.languageId !== "php") {
+            this.hideStatusBar();
             return;
         }
 
@@ -123,7 +122,8 @@ export class PHPStan
             }
         }
 
-        let autoload = "";
+        let autoload = [];
+        let project = [];
 
         const workspaceFolder = workspace.getWorkspaceFolder(doc.uri);
 
@@ -132,20 +132,36 @@ export class PHPStan
             const autoloadfile = path.join(workspacefolderPath, "vendor/autoload.php");
 
             if (fs.existsSync(autoloadfile)) {
-                autoload = `--autoload-file=${autoloadfile}`;
+                autoload.push(`--autoload-file=${autoloadfile}`);
             }
         }    
 
+        if (this._config.projectFile !== null) {
+            project.push("-c");
+            project.push(this._config.projectFile);
+        } else if (workspaceFolder) {
+            const files = ["phpstan.neon", "phpstan.neon.dist"];
+
+            for (const file of files) {
+                if (fs.existsSync(path.join(workspaceFolder.uri.fsPath, file))) {
+                    project.push("-c");
+                    project.push(path.join(workspaceFolder.uri.fsPath, file));
+
+                    break;
+                }
+            }
+        }
+
         this._current[doc.fileName] = child_process.spawn(this._binaryPath, [
             "analyse",
-            `--level=${this._level}`,
-            autoload,
+            `--level=${this._config.level}`,
+            ...autoload,
+            ...project,
             "--errorFormat=raw",
-            `--memory-limit=${this._memoryLimit}`,
-            ...this._customOptions,
+            `--memory-limit=${this._config.memoryLimit}`,
+            ...this._config.options,
             doc.fileName
         ]);
-        this._filename = doc.fileName;
 
         let results: string = "";
         this._current[doc.fileName].stdout.on('data', (data) => {
@@ -164,8 +180,46 @@ export class PHPStan
             }
         });
 
+        this._statusBarItem.text = "PHPStan processing...";
+        this._statusBarItem.show();
+
+        this._numActive++;
         this._current[doc.fileName].on('exit', (code) => {
+            this._numActive--;
+            
             if (code !== 1) {
+                const data: any[] = results.split("\n")
+                    .map(x => x.trim())
+                    .filter(x => x.startsWith("Warning:") || x.startsWith("Fatal error:"))
+                    .map(x => {
+                        if (x.startsWith("Warning:")) {
+                            const message = x.substr("Warning:".length).trim();
+
+                            return {
+                                message,
+                                type: "warning"
+                            };
+                        }
+
+                        const message = x.substr("Fatal error:".length).trim();
+                        return {
+                            message,
+                            type: "error"
+                        };
+                    });
+                
+                for (const error of data) {
+                    switch (error.type) {
+                        case "warning":
+                            window.showWarningMessage(error.message);
+                            break;
+                        
+                        case "error":
+                            window.showErrorMessage(error.message);
+                            break;
+                    }
+                }
+
                 delete this._current[doc.fileName];
                 return;
             }
@@ -210,6 +264,8 @@ export class PHPStan
             }
 
             handleDiagnosticErrors(workspace.textDocuments, errors, this._diagnosticCollection);
+
+            this.hideStatusBar();
         });
     }
 
@@ -226,6 +282,13 @@ export class PHPStan
         this._diagnosticCollection.dispose();
     }
 
+    private hideStatusBar()
+    {
+        if (this._numActive === 0) {
+            this._statusBarItem.hide();
+        }
+    }
+
     get diagnosticCollection()
     {
         return this._diagnosticCollection;
@@ -233,9 +296,9 @@ export class PHPStan
 
     set enabled(val: boolean)
     {
-        this._enabled = val;
+        this._config.enabled = val;
 
-        if (this._enabled) {
+        if (this._config.enabled) {
             if (this._binaryPath === null) {
                 window.showErrorMessage("Failed to find phpstan, phpstan will be disabled for this session.");
             }
@@ -266,7 +329,7 @@ export class PHPStan
 
     set level(val: string)
     {
-        this._level = val;
+        this._config.level = val;
 
         // Reset in-memory cached results
         this._results = {};
@@ -274,12 +337,20 @@ export class PHPStan
 
     set memoryLimit(val: string)
     {
-        this._memoryLimit = val;
+        this._config.memoryLimit = val;
     }
 
     set options(val: string[])
     {
-        this._customOptions = val;
+        this._config.options = val;
+
+        // Reset in-memory cached results
+        this._results = {};
+    }
+
+    set projectFile(val: string)
+    {
+        this._config.projectFile = val;
 
         // Reset in-memory cached results
         this._results = {};

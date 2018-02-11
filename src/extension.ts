@@ -10,6 +10,7 @@ export function activate(context: ExtensionContext)
     const level = config.get<string>("phpstan.level", "max");
     const memoryLimit = config.get<string>("phpstan.memoryLimit", "2048M");
     const options = config.get<string[]>("phpstan.options", []);
+    const projectFile = config.get<string>("phpstan.projectFile", null);
 
     workspace.onDidChangeConfiguration((e) => {
         config = workspace.getConfiguration();
@@ -24,6 +25,8 @@ export function activate(context: ExtensionContext)
             phpstan.memoryLimit = config.get("phpstan.memoryLimit", "2048M");
         } else if (e.affectsConfiguration("phpstan.options")) {
             phpstan.options = config.get<string[]>("phpstan.options", []);
+        } else if (e.affectsConfiguration("phpstan.projectFile")) {
+            phpstan.projectFile = config.get<string>("phpstan.projectFile", null);
         }
     });
 
@@ -32,7 +35,8 @@ export function activate(context: ExtensionContext)
         options,
         memoryLimit,
         level,
-        enabled
+        enabled,
+        projectFile
     });
     let controller = new PHPStanController(phpstan);
 

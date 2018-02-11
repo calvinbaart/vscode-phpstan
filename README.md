@@ -38,7 +38,9 @@ vscode-phpstan provides the following configuration properties and defaults:
 "phpstan.path": null,
 "phpstan.level": "max",
 "phpstan.memoryLimit": "2048M",
+"phpstan.projectFile": null,
 "phpstan.options": []
 ```
 
+``<workspacefolder>/phpstan.neon`` and ``<workspacefolder>/phpstan.neon.dist`` will be used when phpstan.projectFile is set to null.
 phpstan.options can be used to pass extra parameters to the phpstan commandline call.
