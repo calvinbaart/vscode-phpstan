@@ -1,5 +1,5 @@
 import { PHPStan } from "./phpstan";
-import { Disposable, workspace, window, TextDocument, TextEditor } from "vscode";
+import { Disposable, workspace, window, TextDocument, TextEditor, TextDocumentChangeEvent } from "vscode";
 
 export class PHPStanController
 {
@@ -14,6 +14,7 @@ export class PHPStanController
         let subscriptions: Disposable[] = [];
         workspace.onDidSaveTextDocument(this._onDocumentEvent, this, subscriptions);
         workspace.onDidOpenTextDocument(this._onDocumentEvent, this, subscriptions);
+        workspace.onDidChangeTextDocument(this._onDocumentChangeEvent, this, subscriptions);
         window.onDidChangeActiveTextEditor(this._onEditorEvent, this, subscriptions);
 
         // Get the current text editor
@@ -30,6 +31,11 @@ export class PHPStanController
         this._phpstan.updateDocument(e);
     }
 
+    private _onDocumentChangeEvent(e: TextDocumentChangeEvent)
+    {
+        this._phpstan.updateDocument(e.document);
+    }
+    
     private _onEditorEvent(e: TextEditor)
     {
         this._phpstan.updateDocument(e.document);

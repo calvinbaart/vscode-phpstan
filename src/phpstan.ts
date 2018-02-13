@@ -2,12 +2,13 @@ import { ICheckResult, handleDiagnosticErrors } from "./utils";
 import * as child_process from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import * as tmp from "tmp";
+
 import { workspace, window, TextDocument, languages, DiagnosticCollection, StatusBarItem, StatusBarAlignment } from "vscode";
-import { createHash } from "crypto";
 
 interface IResultData
 {
-    hash: string;
+    version: number;
     results: ICheckResult[]
 }
 
@@ -25,6 +26,8 @@ export class PHPStan
 {
     private _current: { [key: string]: child_process.ChildProcess };
     private _results: { [key: string]: IResultData };
+    private _timeouts: { [key: string]: NodeJS.Timer };
+
     private _binaryPath: string | null;
     private _config: IExtensionConfig;
     private _diagnosticCollection: DiagnosticCollection;
@@ -35,6 +38,7 @@ export class PHPStan
     {
         this._current = {};
         this._results = {};
+        this._timeouts = {};
         this._binaryPath = config.path;
         this._config = config;
         this._diagnosticCollection = languages.createDiagnosticCollection("error");
@@ -42,7 +46,7 @@ export class PHPStan
         this._numActive = 0;
 
         if (this._binaryPath !== null && !fs.existsSync(this._binaryPath)) {
-            window.showErrorMessage("Failed to find phpstan, the given path doesn't exist.");
+            window.showErrorMessage("[phpstan] Failed to find phpstan, the given path doesn't exist.");
 
             this._binaryPath = null;
         } else {
@@ -52,7 +56,7 @@ export class PHPStan
 
             if (this._config.enabled) {
                 if (this._binaryPath === null) {
-                    window.showErrorMessage("Failed to find phpstan, phpstan will be disabled for this session.");
+                    window.showErrorMessage("[phpstan] Failed to find phpstan, phpstan will be disabled for this session.");
                 }
             }
         }
@@ -102,9 +106,8 @@ export class PHPStan
             delete this._current[doc.fileName];
         }
 
-        let hash = createHash("sha1").update(fs.readFileSync(doc.fileName)).digest("hex");
         if (this._results[doc.fileName] !== undefined) {
-            if (this._results[doc.fileName].hash === hash) {
+            if (this._results[doc.fileName].version === doc.version) {
                 let errors = [...this._results[doc.fileName].results];
 
                 for (let document of workspace.textDocuments) {
@@ -152,121 +155,133 @@ export class PHPStan
             }
         }
 
-        this._current[doc.fileName] = child_process.spawn(this._binaryPath, [
-            "analyse",
-            `--level=${this._config.level}`,
-            ...autoload,
-            ...project,
-            "--errorFormat=raw",
-            `--memory-limit=${this._config.memoryLimit}`,
-            ...this._config.options,
-            doc.fileName
-        ]);
+        if (this._timeouts[doc.fileName] !== undefined) {
+            clearTimeout(this._timeouts[doc.fileName]);
+        }
 
-        let results: string = "";
-        this._current[doc.fileName].stdout.on('data', (data) => {
-            if (data instanceof Buffer) {
-                data = data.toString("utf8");
-            }
-
-            results += data;
-        });
-
-        this._current[doc.fileName].on("error", (err) => {
-            if (err.message.indexOf("ENOENT") !== -1) {
-                window.showErrorMessage("Failed to find phpstan, the given path doesn't exist.");
-
-                this._binaryPath = null;
-            }
-        });
-
-        this._statusBarItem.text = "PHPStan processing...";
-        this._statusBarItem.show();
-
-        this._numActive++;
-        this._current[doc.fileName].on('exit', (code) => {
-            this._numActive--;
+        this._timeouts[doc.fileName] = setTimeout(() => {
+            delete this._timeouts[doc.fileName];
             
-            if (code !== 1) {
-                const data: any[] = results.split("\n")
-                    .map(x => x.trim())
-                    .filter(x => x.startsWith("Warning:") || x.startsWith("Fatal error:"))
-                    .map(x => {
-                        if (x.startsWith("Warning:")) {
-                            const message = x.substr("Warning:".length).trim();
+            var tmpobj = tmp.fileSync();
+            fs.writeSync(tmpobj.fd, doc.getText());
 
+            this._current[doc.fileName] = child_process.spawn(this._binaryPath, [
+                "analyse",
+                `--level=${this._config.level}`,
+                ...autoload,
+                ...project,
+                "--errorFormat=raw",
+                `--memory-limit=${this._config.memoryLimit}`,
+                ...this._config.options,
+                tmpobj.name
+            ]);
+
+            let results: string = "";
+            this._current[doc.fileName].stdout.on('data', (data) => {
+                if (data instanceof Buffer) {
+                    data = data.toString("utf8");
+                }
+
+                results += data;
+            });
+
+            this._current[doc.fileName].on("error", (err) => {
+                if (err.message.indexOf("ENOENT") !== -1) {
+                    window.showErrorMessage("[phpstan] Failed to find phpstan, the given path doesn't exist.");
+
+                    this._binaryPath = null;
+                }
+            });
+
+            this._statusBarItem.text = "[PHPStan] processing...";
+            this._statusBarItem.show();
+
+            this._numActive++;
+            this._current[doc.fileName].on('exit', (code) => {
+                this._numActive--;
+                tmpobj.removeCallback();
+            
+                if (code !== 1) {
+                    const data: any[] = results.split("\n")
+                        .map(x => x.trim())
+                        .filter(x => x.startsWith("Warning:") || x.startsWith("Fatal error:"))
+                        .map(x => {
+                            if (x.startsWith("Warning:")) {
+                                const message = x.substr("Warning:".length).trim();
+
+                                return {
+                                    message,
+                                    type: "warning"
+                                };
+                            }
+
+                            const message = x.substr("Fatal error:".length).trim();
                             return {
                                 message,
-                                type: "warning"
+                                type: "error"
                             };
+                        });
+                
+                    for (const error of data) {
+                        switch (error.type) {
+                            case "warning":
+                                window.showWarningMessage(`[phpstan] ${error.message}`);
+                                break;
+                        
+                            case "error":
+                                window.showErrorMessage(`[phpstan] ${error.message}`);
+                                break;
+                        }
+                    }
+
+                    delete this._current[doc.fileName];
+                    return;
+                }
+
+                const data: ICheckResult[] = results
+                    .split("\n")
+                    .map(x => x.substr(tmpobj.name.length + 1).trim())
+                    .filter(x => x.length > 0)
+                    .map(x => x.split(":"))
+                    .map(x => {
+                        let line = Number(x[0]);
+                        x.shift();
+
+                        // line 0 is not allowed so we need to start at 1
+                        if (line === 0) {
+                            line++;
                         }
 
-                        const message = x.substr("Fatal error:".length).trim();
+                        const error = x.join(":");
                         return {
-                            message,
-                            type: "error"
+                            file: doc.fileName,
+                            line: line,
+                            msg: `[phpstan] ${error}`
                         };
-                    });
-                
-                for (const error of data) {
-                    switch (error.type) {
-                        case "warning":
-                            window.showWarningMessage(error.message);
-                            break;
-                        
-                        case "error":
-                            window.showErrorMessage(error.message);
-                            break;
+                    })
+                    .filter(x => !isNaN(x.line));
+
+                this._results[doc.fileName] = {
+                    version: doc.version,
+                    results: data
+                };
+
+                let errors = data;
+                for (let document of workspace.textDocuments) {
+                    if (document.fileName === doc.fileName) {
+                        continue;
+                    }
+
+                    if (this._results[document.fileName] !== undefined) {
+                        errors = [...errors, ...this._results[document.fileName].results];
                     }
                 }
 
-                delete this._current[doc.fileName];
-                return;
-            }
+                handleDiagnosticErrors(workspace.textDocuments, errors, this._diagnosticCollection);
 
-            const data: ICheckResult[] = results
-                .split("\n")
-                .map(x => x.substr(doc.fileName.length + 1).trim())
-                .filter(x => x.length > 0)
-                .map(x => x.split(":"))
-                .map(x => {
-                    let line = Number(x[0]);
-                    x.shift();
-
-                    // line 0 is not allowed so we need to start at 1
-                    if (line === 0) {
-                        line++;
-                    }
-
-                    const error = x.join(":");
-                    return {
-                        file: doc.fileName,
-                        line: line,
-                        msg: error
-                    };
-                })
-                .filter(x => !isNaN(x.line));
-
-            this._results[doc.fileName] = {
-                hash: hash,
-                results: data
-            };
-
-            let errors = data;
-            for (let document of workspace.textDocuments) {
-                if (document.fileName === doc.fileName) {
-                    continue;
-                }
-
-                if (this._results[document.fileName] !== undefined) {
-                    errors = [...errors, ...this._results[document.fileName].results];
-                }
-            }
-
-            handleDiagnosticErrors(workspace.textDocuments, errors, this._diagnosticCollection);
-
-            this.hideStatusBar();
-        });
+                this.hideStatusBar();
+            });
+        }, 300);
     }
 
     dispose()
@@ -300,8 +315,20 @@ export class PHPStan
 
         if (this._config.enabled) {
             if (this._binaryPath === null) {
-                window.showErrorMessage("Failed to find phpstan, phpstan will be disabled for this session.");
+                window.showErrorMessage("[phpstan] Failed to find phpstan, phpstan will be disabled for this session.");
             }
+        } else {
+            for (let key in this._current) {
+                if (this._current[key].killed) {
+                    continue;
+                }
+
+                this._current[key].kill();
+            }
+
+            this._current = {};
+            this._numActive = 0;
+            this.hideStatusBar();
         }
     }
 
@@ -317,11 +344,11 @@ export class PHPStan
         }
 
         if (this._binaryPath === null) {
-            window.showErrorMessage("Failed to find phpstan, phpstan will be disabled.");
+            window.showErrorMessage("[phpstan] Failed to find phpstan, phpstan will be disabled.");
         }
 
         if (val !== null && !fs.existsSync(this._binaryPath)) {
-            window.showErrorMessage("Failed to find phpstan, the given path doesn't exist.");
+            window.showErrorMessage("[phpstan] Failed to find phpstan, the given path doesn't exist.");
 
             this._binaryPath = null;
         }
