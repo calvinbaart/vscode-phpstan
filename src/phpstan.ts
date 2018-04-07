@@ -20,12 +20,11 @@ interface IExtensionConfig
     options: string[],
     enabled: boolean,
     projectFile: string
-}    
+}
 
 export class PHPStan
 {
     private _current: { [key: string]: child_process.ChildProcess };
-    private _results: { [key: string]: IResultData };
     private _timeouts: { [key: string]: NodeJS.Timer };
 
     private _binaryPath: string | null;
@@ -37,7 +36,6 @@ export class PHPStan
     constructor(config: IExtensionConfig)
     {
         this._current = {};
-        this._results = {};
         this._timeouts = {};
         this._binaryPath = config.path;
         this._config = config;
@@ -89,46 +87,29 @@ export class PHPStan
         }
     }
 
-    public updateDocument(doc: TextDocument)
+    public updateDocument(updatedDocument: TextDocument)
     {
         if (this._binaryPath === null || !this._config.enabled) {
             this.hideStatusBar();
             return;
         }
 
-        if (doc.languageId !== "php") {
+        if (updatedDocument.languageId !== "php") {
             this.hideStatusBar();
             return;
         }
 
-        if (this._current[doc.fileName] !== undefined) {
-            this._current[doc.fileName].kill();
-            delete this._current[doc.fileName];
+        if (this._current[updatedDocument.fileName] !== undefined) {
+            this._current[updatedDocument.fileName].kill();
+            delete this._current[updatedDocument.fileName];
         }
 
-        if (this._results[doc.fileName] !== undefined) {
-            if (this._results[doc.fileName].version === doc.version) {
-                let errors = [...this._results[doc.fileName].results];
-
-                for (let document of workspace.textDocuments) {
-                    if (document.fileName === doc.fileName) {
-                        continue;
-                    }
-
-                    if (this._results[document.fileName] !== undefined) {
-                        errors = [...errors, ...this._results[document.fileName].results];
-                    }
-                }
-
-                handleDiagnosticErrors(workspace.textDocuments, errors, this._diagnosticCollection);
-                return;
-            }
-        }
+        this.diagnosticCollection.clear();
 
         let autoload = [];
         let project = [];
 
-        const workspaceFolder = workspace.getWorkspaceFolder(doc.uri);
+        const workspaceFolder = workspace.getWorkspaceFolder(updatedDocument.uri);
 
         if (workspaceFolder) {
             const workspacefolderPath = workspaceFolder.uri.fsPath;
@@ -137,7 +118,7 @@ export class PHPStan
             if (fs.existsSync(autoloadfile)) {
                 autoload.push(`--autoload-file=${autoloadfile}`);
             }
-        }    
+        }
 
         if (this._config.projectFile !== null) {
             project.push("-c");
@@ -155,17 +136,17 @@ export class PHPStan
             }
         }
 
-        if (this._timeouts[doc.fileName] !== undefined) {
-            clearTimeout(this._timeouts[doc.fileName]);
+        if (this._timeouts[updatedDocument.fileName] !== undefined) {
+            clearTimeout(this._timeouts[updatedDocument.fileName]);
         }
 
-        this._timeouts[doc.fileName] = setTimeout(() => {
-            delete this._timeouts[doc.fileName];
-            
-            var tmpobj = tmp.fileSync();
-            fs.writeSync(tmpobj.fd, doc.getText());
+        this._timeouts[updatedDocument.fileName] = setTimeout(() => {
+            delete this._timeouts[updatedDocument.fileName];
 
-            this._current[doc.fileName] = child_process.spawn(this._binaryPath, [
+            var tmpobj = tmp.fileSync();
+            fs.writeSync(tmpobj.fd, updatedDocument.getText());
+
+            this._current[updatedDocument.fileName] = child_process.spawn(this._binaryPath, [
                 "analyse",
                 `--level=${this._config.level}`,
                 ...autoload,
@@ -177,7 +158,7 @@ export class PHPStan
             ]);
 
             let results: string = "";
-            this._current[doc.fileName].stdout.on('data', (data) => {
+            this._current[updatedDocument.fileName].stdout.on('data', (data) => {
                 if (data instanceof Buffer) {
                     data = data.toString("utf8");
                 }
@@ -185,7 +166,7 @@ export class PHPStan
                 results += data;
             });
 
-            this._current[doc.fileName].on("error", (err) => {
+            this._current[updatedDocument.fileName].on("error", (err) => {
                 if (err.message.indexOf("ENOENT") !== -1) {
                     window.showErrorMessage("[phpstan] Failed to find phpstan, the given path doesn't exist.");
 
@@ -197,10 +178,10 @@ export class PHPStan
             this._statusBarItem.show();
 
             this._numActive++;
-            this._current[doc.fileName].on('exit', (code) => {
+            this._current[updatedDocument.fileName].on('exit', (code) => {
                 this._numActive--;
                 tmpobj.removeCallback();
-            
+
                 if (code !== 1) {
                     const data: any[] = results.split("\n")
                         .map(x => x.trim())
@@ -221,20 +202,21 @@ export class PHPStan
                                 type: "error"
                             };
                         });
-                
+
                     for (const error of data) {
                         switch (error.type) {
                             case "warning":
                                 window.showWarningMessage(`[phpstan] ${error.message}`);
                                 break;
-                        
+
                             case "error":
                                 window.showErrorMessage(`[phpstan] ${error.message}`);
                                 break;
                         }
                     }
 
-                    delete this._current[doc.fileName];
+                    delete this._current[updatedDocument.fileName];
+                    this.hideStatusBar();
                     return;
                 }
 
@@ -254,26 +236,17 @@ export class PHPStan
 
                         const error = x.join(":");
                         return {
-                            file: doc.fileName,
+                            file: updatedDocument.fileName,
                             line: line,
                             msg: `[phpstan] ${error}`
                         };
                     })
                     .filter(x => !isNaN(x.line));
 
-                this._results[doc.fileName] = {
-                    version: doc.version,
-                    results: data
-                };
-
                 let errors = data;
                 for (let document of workspace.textDocuments) {
-                    if (document.fileName === doc.fileName) {
+                    if (document.fileName === updatedDocument.fileName) {
                         continue;
-                    }
-
-                    if (this._results[document.fileName] !== undefined) {
-                        errors = [...errors, ...this._results[document.fileName].results];
                     }
                 }
 
@@ -336,9 +309,6 @@ export class PHPStan
     {
         this._binaryPath = val;
 
-        // Reset in-memory cached results
-        this._results = {};
-
         if (this._binaryPath === null) {
             this.findPHPStan();
         }
@@ -357,9 +327,6 @@ export class PHPStan
     set level(val: string)
     {
         this._config.level = val;
-
-        // Reset in-memory cached results
-        this._results = {};
     }
 
     set memoryLimit(val: string)
@@ -370,16 +337,10 @@ export class PHPStan
     set options(val: string[])
     {
         this._config.options = val;
-
-        // Reset in-memory cached results
-        this._results = {};
     }
 
     set projectFile(val: string)
     {
         this._config.projectFile = val;
-
-        // Reset in-memory cached results
-        this._results = {};
     }
 }
