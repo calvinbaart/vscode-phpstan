@@ -11,19 +11,17 @@ export function handleDiagnosticErrors(document: TextDocument[], errors: ICheckR
 
     let diagnosticMap: Map<string, Diagnostic[]> = new Map();
     errors.forEach(error => {
-        let canonicalFile = Uri.file(error.file).toString();
+        const canonicalFile = Uri.file(error.file).toString();
+        const doc = document.find((item) => item.uri.toString() === canonicalFile);
         let startColumn = 0;
         let endColumn = 1;
 
-        for (const doc of document) {
-            if (doc.uri.toString() === canonicalFile) {
-                let range = new Range(error.line - 1, 0, error.line - 1, doc.lineAt(error.line - 1).range.end.character + 1);
-                let text = doc.getText(range);
-                let [_, leading, trailing] = /^(\s*).*(\s*)$/.exec(text);
-                startColumn = leading.length;
-                endColumn = text.length - trailing.length;
-                break;
-            }
+        if (doc !== undefined) {
+            let range = new Range(error.line - 1, 0, error.line - 1, doc.lineAt(error.line - 1).range.end.character + 1);
+            let text = doc.getText(range);
+            let [_, leading, trailing] = /^(\s*).*(\s*)$/.exec(text);
+            startColumn = leading.length;
+            endColumn = text.length - trailing.length;
         }
 
         let range = new Range(error.line - 1, startColumn, error.line - 1, endColumn);

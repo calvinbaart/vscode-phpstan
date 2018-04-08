@@ -2,7 +2,7 @@
     "name": "vscode-phpstan",
     "displayName": "vscode-phpstan",
     "description": "PHPStan support in VSCode",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "publisher": "Calsmurf2904",
     "engines": {
         "vscode": "^1.19.0"
