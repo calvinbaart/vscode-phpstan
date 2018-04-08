@@ -6,12 +6,6 @@ import * as tmp from "tmp";
 
 import { workspace, window, TextDocument, languages, DiagnosticCollection, StatusBarItem, StatusBarAlignment } from "vscode";
 
-interface IResultData
-{
-    version: number;
-    results: ICheckResult[]
-}
-
 interface IExtensionConfig
 {
     path: string | null;
