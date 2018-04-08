@@ -75,8 +75,14 @@ export class PHPStan
 
         for (const path of paths) {
             if (fs.existsSync(path)) {
-                this._binaryPath = path;
-                break;
+                // Check if we have permission to execute this file
+                try {
+                    fs.accessSync(path, fs.constants.X_OK);
+                    this._binaryPath = path;
+                    break;
+                } catch (exception) {
+                    continue;
+                }
             }
         }
     }
@@ -315,6 +321,17 @@ export class PHPStan
             window.showErrorMessage("[phpstan] Failed to find phpstan, the given path doesn't exist.");
 
             this._binaryPath = null;
+        }
+
+        // Check if we have permission to execute this file
+        if (val !== null) {
+            try {
+                fs.accessSync(this._binaryPath, fs.constants.X_OK);
+            } catch (exception) {
+                window.showErrorMessage("[phpstan] Failed to find phpstan, the given path is not executable.");
+
+                this._binaryPath = null;
+            }
         }
     }
 
