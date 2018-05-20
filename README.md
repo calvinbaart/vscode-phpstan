@@ -4,7 +4,7 @@
 
 <p align="center">
   <br />
-  <img src="https://puu.sh/zkXAe/e727a924d6.png" alt="Image Sample" />
+  <img src="https://puu.sh/zkXAe/e727a924d6.png" alt="Image Sample 1" />
 </p>
 
 ## What is this?
@@ -29,6 +29,15 @@ or locally using:
 composer require --dev phpstan/phpstan
 ```
 
+## Commands
+
+PHPStan includes an explorer-context command called "PHPStan: Scan for Errors". This command works on both directories and files.
+
+<p align="center">
+  <br />
+  <img src="https://puu.sh/ApEKt/e7eabb4b1c.png" alt="Image Sample 2" />
+</p>
+
 ## Configuration
 
 vscode-phpstan provides the following configuration properties and defaults:
@@ -39,6 +48,7 @@ vscode-phpstan provides the following configuration properties and defaults:
 "phpstan.level": "max",
 "phpstan.memoryLimit": "2048M",
 "phpstan.projectFile": null,
+"phpstan.excludeFiles": [],
 "phpstan.options": []
 ```
 

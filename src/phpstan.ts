@@ -1,4 +1,4 @@
-import { ICheckResult, handleDiagnosticErrors } from "./utils";
+import { ICheckResult, handleDiagnosticErrors, globAsync } from "./utils";
 import * as child_process from "child_process";
 import * as path from "path";
 import * as fs from "fs";
@@ -17,6 +17,7 @@ import {
     Disposable,
     DiagnosticSeverity
 } from "vscode";
+import * as glob from "glob";
 
 interface IExtensionConfig {
     path: string | null;
@@ -25,6 +26,7 @@ interface IExtensionConfig {
     options: string[],
     enabled: boolean,
     projectFile: string
+    excludeFiles: string[];
 }
 
 export class PHPStan {
@@ -55,7 +57,7 @@ export class PHPStan {
         this._numQueued = 0;
 
         this._command = commands.registerCommand("extension.scanForErrors", (file) => {
-            const path = file["path"];
+            const path = file["fsPath"];
 
             if (fs.lstatSync(path).isDirectory()) {
                 this.scanDirectory(path);
@@ -195,6 +197,12 @@ export class PHPStan {
                 return true;
             });
 
+            let options = {};
+
+            if (workspaceFolder) {
+                options["cwd"] = workspaceFolder.uri.fsPath;
+            }
+
             this._numQueued--;
             this._current[updatedDocument.fileName] = child_process.spawn(this._binaryPath, [
                 "analyse",
@@ -205,7 +213,7 @@ export class PHPStan {
                 `--memory-limit=${this._config.memoryLimit}`,
                 ...this._config.options,
                 filePath
-            ]);
+            ], options);
 
             let results: string = "";
             this._current[updatedDocument.fileName].stdout.on("data", (data) => {
@@ -348,6 +356,23 @@ export class PHPStan {
      * @param path File path to scan
      */
     public scanPath(path: string) {
+        const documents = workspace.textDocuments;
+
+        let found = false;
+
+        for (const document of documents) {
+            if (document.fileName === path) {
+                this.updateDocument(document);
+                found = true;
+
+                break;
+            }
+        }
+
+        if (found) {
+            return;
+        }
+
         workspace.openTextDocument(path);
     }
 
@@ -355,35 +380,24 @@ export class PHPStan {
      * Scans all the files recursively in the directory
      * @param basePath Directory path to scan
      */
-    public scanDirectory(basePath: string) {
+    public async scanDirectory(basePath: string) {
         // TODO: Change the code to make sure PHPStan iterates the directories instead of us
-        const getAllPHPFiles = (basePath): string[] => {
-            let files: string[] = fs.readdirSync(basePath);
-            let ret = [];
 
-            files.forEach(file => {
-                const filePath = path.join(basePath, file);
-                const stat = fs.lstatSync(filePath);
+        const workspaceFolder = workspace.getWorkspaceFolder(Uri.file(basePath));
+        let excludes = this._config.excludeFiles;
 
-                if (stat.isDirectory()) {
-                    const tmp = getAllPHPFiles(filePath);
-                    ret = [...ret, ...tmp];
-                    return;
-                }
+        if (workspaceFolder) {
+            let workspaceDir = workspaceFolder.uri.fsPath;
 
-                if (path.extname(filePath).toLowerCase() !== ".php") {
-                    return;
-                }
-
-                ret.push(filePath);
-            });
-
-            return ret;
+            excludes = excludes.map(x => path.join(workspaceDir, x));
         }
 
-        const files = getAllPHPFiles(basePath);
+        const files = await globAsync(basePath + path.sep + "**/*.php", {
+            ignore: excludes
+        });
+
         for (const file of files) {
-            workspace.openTextDocument(file);
+            this.scanPath(file);
         }
     }
 
@@ -500,5 +514,9 @@ export class PHPStan {
 
     set projectFile(val: string) {
         this._config.projectFile = val;
+    }
+
+    set excludeFiles(val: string[]) {
+        this._config.excludeFiles = val;
     }
 }

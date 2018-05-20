@@ -1,4 +1,5 @@
 import { TextDocument, Diagnostic, Uri, Range, DiagnosticSeverity, DiagnosticCollection } from "vscode";
+import * as glob from "glob";
 
 export interface ICheckResult {
     file: string;
@@ -42,3 +43,16 @@ export function handleDiagnosticErrors(document: TextDocument[], errors: ICheckR
         diagnosticCollection.set(fileUri, newErrors);
     });
 };
+
+export function globAsync(pattern: string, options: glob.IOptions): Promise<string[]>
+{
+    return new Promise((resolve, reject) => {
+        glob(pattern, options, (err, matches) => {
+            if (err) {
+                return reject(err);
+            }
+
+            resolve(matches);
+        });
+    });
+}
