@@ -4,6 +4,7 @@ export interface ICheckResult {
     file: string;
     line: number;
     msg: string;
+    type?: DiagnosticSeverity;
 }
 
 export function handleDiagnosticErrors(document: TextDocument[], errors: ICheckResult[], diagnosticCollection: DiagnosticCollection) {
@@ -24,8 +25,9 @@ export function handleDiagnosticErrors(document: TextDocument[], errors: ICheckR
             endColumn = text.length - trailing.length;
         }
 
+        let severity = error.type === undefined ? DiagnosticSeverity.Error : error.type;
         let range = new Range(error.line - 1, startColumn, error.line - 1, endColumn);
-        let diagnostic = new Diagnostic(range, error.msg, DiagnosticSeverity.Error);
+        let diagnostic = new Diagnostic(range, error.msg, severity);
         let diagnostics = diagnosticMap.get(canonicalFile);
         if (!diagnostics) {
             diagnostics = [];

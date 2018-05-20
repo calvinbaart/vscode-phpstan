@@ -14,7 +14,8 @@ import {
     StatusBarAlignment,
     Uri,
     commands,
-    Disposable
+    Disposable,
+    DiagnosticSeverity
 } from "vscode";
 
 interface IExtensionConfig {
@@ -169,6 +170,16 @@ export class PHPStan {
                 fs.writeSync(result.fd, updatedDocument.getText());
 
                 filePath = result.name;
+            }
+
+            if (this._errors[updatedDocument.fileName] === undefined) {
+                this._errors[updatedDocument.fileName] = [{
+                    file: updatedDocument.fileName,
+                    line: 1,
+                    msg: `[phpstan] queued for scanning`,
+                    type: DiagnosticSeverity.Information
+                }];
+                this._documents[updatedDocument.fileName] = updatedDocument;
             }
 
             this._numQueued++;
