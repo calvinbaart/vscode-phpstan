@@ -2,8 +2,7 @@ import { ExtensionContext, workspace } from "vscode";
 import { PHPStan } from "./phpstan";
 import { PHPStanController } from "./controller";
 
-export function activate(context: ExtensionContext)
-{
+export function activate(context: ExtensionContext) {
     let config = workspace.getConfiguration();
     const enabled = config.get("phpstan.enabled", true);
     const path = config.get<string>("phpstan.path", null);
@@ -14,7 +13,7 @@ export function activate(context: ExtensionContext)
 
     workspace.onDidChangeConfiguration((e) => {
         config = workspace.getConfiguration();
-        
+
         if (e.affectsConfiguration("phpstan.enabled")) {
             phpstan.enabled = config.get("phpstan.enabled", true);
         } else if (e.affectsConfiguration("phpstan.path")) {

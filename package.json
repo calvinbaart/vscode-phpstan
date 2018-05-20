@@ -70,7 +70,20 @@
                     }
                 }
             }
-        ]
+        ],
+        "commands": [
+            {
+                "command": "extension.scanForErrors",
+                "title": "PHPStan: Scan for Errors"
+            }
+        ],
+        "menus": {
+            "explorer/context": [
+                {
+                    "command": "extension.scanForErrors"
+                }
+            ]
+        }
     },
     "dependencies": {
         "tmp": "0.0.33"

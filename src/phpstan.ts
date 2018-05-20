@@ -4,10 +4,20 @@ import * as path from "path";
 import * as fs from "fs";
 import * as tmp from "tmp";
 
-import { workspace, window, TextDocument, languages, DiagnosticCollection, StatusBarItem, StatusBarAlignment } from "vscode";
+import {
+    workspace,
+    window,
+    TextDocument,
+    languages,
+    DiagnosticCollection,
+    StatusBarItem,
+    StatusBarAlignment,
+    Uri,
+    commands,
+    Disposable
+} from "vscode";
 
-interface IExtensionConfig
-{
+interface IExtensionConfig {
     path: string | null;
     level: string;
     memoryLimit: string;
@@ -16,46 +26,51 @@ interface IExtensionConfig
     projectFile: string
 }
 
-export class PHPStan
-{
+export class PHPStan {
     private _current: { [key: string]: child_process.ChildProcess };
     private _timeouts: { [key: string]: NodeJS.Timer };
+    private _errors: { [key: string]: any };
+    private _documents: { [key: string]: TextDocument };
+    private _command: Disposable;
 
     private _binaryPath: string | null;
     private _config: IExtensionConfig;
     private _diagnosticCollection: DiagnosticCollection;
     private _statusBarItem: StatusBarItem;
     private _numActive: number;
+    private _numQueued: number;
 
-    constructor(config: IExtensionConfig)
-    {
+    constructor(config: IExtensionConfig) {
         this._current = {};
         this._timeouts = {};
+        this._errors = {};
+        this._documents = {};
+
         this._binaryPath = config.path;
         this._config = config;
         this._diagnosticCollection = languages.createDiagnosticCollection("error");
         this._statusBarItem = window.createStatusBarItem(StatusBarAlignment.Left);
         this._numActive = 0;
+        this._numQueued = 0;
 
-        if (this._binaryPath !== null && !fs.existsSync(this._binaryPath)) {
-            window.showErrorMessage("[phpstan] Failed to find phpstan, the given path doesn't exist.");
+        this._command = commands.registerCommand("extension.scanForErrors", (file) => {
+            const path = file["path"];
 
-            this._binaryPath = null;
-        } else {
-            if (this._binaryPath === null) {
-                this.findPHPStan();
+            if (fs.lstatSync(path).isDirectory()) {
+                this.scanDirectory(path);
+                return;
             }
 
-            if (this._config.enabled) {
-                if (this._binaryPath === null) {
-                    window.showErrorMessage("[phpstan] Failed to find phpstan, phpstan will be disabled for this session.");
-                }
-            }
-        }
+            this.scanPath(path);
+        });
+
+        this.findBinaryPath();
     }
 
-    public findPHPStan()
-    {
+    /**
+     * Filesystem method to find PHPStan
+     */
+    public findPHPStan() {
         const vendor = "vendor/bin/phpstan" + (process.platform === "win32" ? ".bat" : "");
         const paths = [];
 
@@ -87,8 +102,13 @@ export class PHPStan
         }
     }
 
-    public updateDocument(updatedDocument: TextDocument)
-    {
+    /**
+     * This is where the magic happens. This method calls the PHPStan executable, 
+     * parses the errors and outputs them to VSCode.
+     * 
+     * @param updatedDocument The document to re-scan
+     */
+    public updateDocument(updatedDocument: TextDocument) {
         if (this._binaryPath === null || !this._config.enabled) {
             this.hideStatusBar();
             return;
@@ -103,8 +123,6 @@ export class PHPStan
             this._current[updatedDocument.fileName].kill();
             delete this._current[updatedDocument.fileName];
         }
-
-        this.diagnosticCollection.clear();
 
         let autoload = [];
         let project = [];
@@ -140,12 +158,33 @@ export class PHPStan
             clearTimeout(this._timeouts[updatedDocument.fileName]);
         }
 
-        this._timeouts[updatedDocument.fileName] = setTimeout(() => {
+        this._timeouts[updatedDocument.fileName] = setTimeout(async () => {
             delete this._timeouts[updatedDocument.fileName];
 
-            var tmpobj = tmp.fileSync();
-            fs.writeSync(tmpobj.fd, updatedDocument.getText());
+            let result: tmp.SynchrounousResult = null;
+            let filePath: string = updatedDocument.fileName;
 
+            if (updatedDocument.isDirty) {
+                result = tmp.fileSync();
+                fs.writeSync(result.fd, updatedDocument.getText());
+
+                filePath = result.name;
+            }
+
+            this._numQueued++;
+
+            // PHPStan doesn't like running parallel so just lock it to 1 instance now:
+            // https://github.com/phpstan/phpstan/issues/934
+            await this.waitFor(() => {
+                if (this._numActive !== 0) {
+                    return false;
+                }
+
+                this._numActive++;
+                return true;
+            });
+
+            this._numQueued--;
             this._current[updatedDocument.fileName] = child_process.spawn(this._binaryPath, [
                 "analyse",
                 `--level=${this._config.level}`,
@@ -154,11 +193,11 @@ export class PHPStan
                 "--errorFormat=raw",
                 `--memory-limit=${this._config.memoryLimit}`,
                 ...this._config.options,
-                tmpobj.name
+                filePath
             ]);
 
             let results: string = "";
-            this._current[updatedDocument.fileName].stdout.on('data', (data) => {
+            this._current[updatedDocument.fileName].stdout.on("data", (data) => {
                 if (data instanceof Buffer) {
                     data = data.toString("utf8");
                 }
@@ -177,15 +216,18 @@ export class PHPStan
             this._statusBarItem.text = "[PHPStan] processing...";
             this._statusBarItem.show();
 
-            this._numActive++;
-            this._current[updatedDocument.fileName].on('exit', (code) => {
+            this._current[updatedDocument.fileName].on("exit", (code) => {
                 this._numActive--;
-                tmpobj.removeCallback();
+
+                if (result !== null) {
+                    result.removeCallback();
+                }
 
                 if (code !== 1) {
                     const data: any[] = results.split("\n")
                         .map(x => x.trim())
-                        .filter(x => x.startsWith("Warning:") || x.startsWith("Fatal error:"))
+                        .filter(x => !x.startsWith("!") && x.trim().length !== 0)
+                        // .filter(x => x.startsWith("Warning:") || x.startsWith("Fatal error:"))
                         .map(x => {
                             if (x.startsWith("Warning:")) {
                                 const message = x.substr("Warning:".length).trim();
@@ -196,10 +238,20 @@ export class PHPStan
                                 };
                             }
 
-                            const message = x.substr("Fatal error:".length).trim();
+                            if (x.startsWith("Fatal error:")) {
+                                const message = x.substr("Fatal error:".length).trim();
+
+                                return {
+                                    message,
+                                    type: "error"
+                                };
+                            }
+
+                            const message = x.trim();
+
                             return {
                                 message,
-                                type: "error"
+                                type: "info"
                             };
                         });
 
@@ -212,17 +264,24 @@ export class PHPStan
                             case "error":
                                 window.showErrorMessage(`[phpstan] ${error.message}`);
                                 break;
+                            
+                            case "info":
+                                window.showInformationMessage(`[phpstan] ${error.message}`);
+                                break;
                         }
                     }
 
                     delete this._current[updatedDocument.fileName];
                     this.hideStatusBar();
-                    return;
+
+                    if (data.length > 0) {
+                        return;
+                    }
                 }
 
                 const data: ICheckResult[] = results
                     .split("\n")
-                    .map(x => x.substr(tmpobj.name.length + 1).trim())
+                    .map(x => x.substr(filePath.length + 1).trim())
                     .filter(x => x.length > 0)
                     .map(x => x.split(":"))
                     .map(x => {
@@ -243,22 +302,24 @@ export class PHPStan
                     })
                     .filter(x => !isNaN(x.line));
 
-                let errors = data;
-                for (let document of workspace.textDocuments) {
-                    if (document.fileName === updatedDocument.fileName) {
-                        continue;
-                    }
-                }
+                this._errors[updatedDocument.fileName] = data;
+                this._documents[updatedDocument.fileName] = updatedDocument;
 
-                handleDiagnosticErrors(workspace.textDocuments, errors, this._diagnosticCollection);
+                let documents = Object.values(this._documents);
+                let errors = [].concat.apply([], Object.values(this._errors));
+
+                this.diagnosticCollection.clear();
+                handleDiagnosticErrors(documents, errors, this._diagnosticCollection);
 
                 this.hideStatusBar();
             });
         }, 300);
     }
 
-    dispose()
-    {
+    /**
+     * Cleans up everything this extension created
+     */
+    dispose() {
         for (let key in this._current) {
             if (this._current[key].killed) {
                 continue;
@@ -268,22 +329,102 @@ export class PHPStan
         }
 
         this._diagnosticCollection.dispose();
+        this._command.dispose();
     }
 
-    private hideStatusBar()
-    {
-        if (this._numActive === 0) {
+    /**
+     * Scans the file located at path
+     * @param path File path to scan
+     */
+    public scanPath(path: string) {
+        workspace.openTextDocument(path);
+    }
+
+    /**
+     * Scans all the files recursively in the directory
+     * @param basePath Directory path to scan
+     */
+    public scanDirectory(basePath: string) {
+        // TODO: Change the code to make sure PHPStan iterates the directories instead of us
+        const getAllPHPFiles = (basePath): string[] => {
+            let files: string[] = fs.readdirSync(basePath);
+            let ret = [];
+
+            files.forEach(file => {
+                const filePath = path.join(basePath, file);
+                const stat = fs.lstatSync(filePath);
+
+                if (stat.isDirectory()) {
+                    const tmp = getAllPHPFiles(filePath);
+                    ret = [...ret, ...tmp];
+                    return;
+                }
+
+                if (path.extname(filePath).toLowerCase() !== ".php") {
+                    return;
+                }
+
+                ret.push(filePath);
+            });
+
+            return ret;
+        }
+
+        const files = getAllPHPFiles(basePath);
+        for (const file of files) {
+            workspace.openTextDocument(file);
+        }
+    }
+
+    /**
+     * Hides the statusbar if there are no active items
+     */
+    private hideStatusBar() {
+        if (this._numActive === 0 && this._numQueued === 0) {
             this._statusBarItem.hide();
         }
     }
 
-    get diagnosticCollection()
-    {
+    /**
+     * Determines the location of the PHPStan executable based on config and raw filesystem search
+     */
+    private findBinaryPath() {
+        if (this._binaryPath !== null && !fs.existsSync(this._binaryPath)) {
+            window.showErrorMessage("[phpstan] Failed to find phpstan, the given path doesn't exist.");
+
+            this._binaryPath = null;
+            return;
+        }
+
+        if (this._binaryPath === null) {
+            this.findPHPStan();
+        }
+
+        if (this._config.enabled && this._binaryPath === null) {
+            window.showErrorMessage("[phpstan] Failed to find phpstan, phpstan will be disabled for this session.");
+        }
+    }
+
+    private waitFor(callback: () => boolean): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const tmp = () => {
+                if (callback()) {
+                    resolve();
+                    return;
+                }
+
+                setTimeout(tmp, 100);
+            };
+
+            tmp();
+        });
+    }
+
+    get diagnosticCollection() {
         return this._diagnosticCollection;
     }
 
-    set enabled(val: boolean)
-    {
+    set enabled(val: boolean) {
         this._config.enabled = val;
 
         if (this._config.enabled) {
@@ -305,8 +446,7 @@ export class PHPStan
         }
     }
 
-    set path(val: string)
-    {
+    set path(val: string) {
         this._binaryPath = val;
 
         if (this._binaryPath === null) {
@@ -335,23 +475,19 @@ export class PHPStan
         }
     }
 
-    set level(val: string)
-    {
+    set level(val: string) {
         this._config.level = val;
     }
 
-    set memoryLimit(val: string)
-    {
+    set memoryLimit(val: string) {
         this._config.memoryLimit = val;
     }
 
-    set options(val: string[])
-    {
+    set options(val: string[]) {
         this._config.options = val;
     }
 
-    set projectFile(val: string)
-    {
+    set projectFile(val: string) {
         this._config.projectFile = val;
     }
 }
