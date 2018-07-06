@@ -74,7 +74,8 @@ export class PHPStan {
      * Filesystem method to find PHPStan
      */
     public findPHPStan() {
-        const vendor = "vendor/bin/phpstan" + (process.platform === "win32" ? ".bat" : "");
+        const executableName = "phpstan" + (process.platform === "win32" ? ".bat" : "");
+        const vendor = "vendor/bin/" + executableName;
         const paths = [];
 
         for (const folder of workspace.workspaceFolders) {
@@ -89,6 +90,11 @@ export class PHPStan {
             } else {
                 paths.push(path.join(process.env.HOME, ".composer", vendor))
             }
+        }
+
+        const globalPaths = process.env.PATH.split(path.delimiter);
+        for (const globalPath of globalPaths) {
+            paths.push(globalPath + path.sep + executableName);
         }
 
         for (const path of paths) {
