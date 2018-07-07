@@ -56,3 +56,18 @@ export function globAsync(pattern: string, options: glob.IOptions): Promise<stri
         });
     });
 }
+
+export function waitFor(callback: () => boolean): Promise < void> {
+    return new Promise((resolve, reject) => {
+        const tmp = () => {
+            if (callback()) {
+                resolve();
+                return;
+            }
+
+            setTimeout(tmp, 100);
+        };
+
+        tmp();
+    });
+}

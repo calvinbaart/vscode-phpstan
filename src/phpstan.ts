@@ -1,4 +1,4 @@
-import { ICheckResult, handleDiagnosticErrors, globAsync } from "./utils";
+import { ICheckResult, handleDiagnosticErrors, globAsync, waitFor } from "./utils";
 import * as child_process from "child_process";
 import * as path from "path";
 import * as fs from "fs";
@@ -117,7 +117,7 @@ export class PHPStan {
      * 
      * @param updatedDocument The document to re-scan
      */
-    public updateDocument(updatedDocument: TextDocument) {
+    public async updateDocument(updatedDocument: TextDocument) {
         if (this._binaryPath === null || !this._config.enabled) {
             this.hideStatusBar();
             return;
@@ -145,6 +145,10 @@ export class PHPStan {
             if (fs.existsSync(autoloadfile)) {
                 autoload.push(`--autoload-file=${autoloadfile}`);
             }
+        }
+
+        if (await this.isExcluded(updatedDocument)) {
+            return;
         }
 
         if (this._config.projectFile !== null) {
@@ -194,7 +198,7 @@ export class PHPStan {
 
             // PHPStan doesn't like running parallel so just lock it to 1 instance now:
             // https://github.com/phpstan/phpstan/issues/934
-            await this.waitFor(() => {
+            await waitFor(() => {
                 if (this._numActive !== 0) {
                     return false;
                 }
@@ -300,10 +304,12 @@ export class PHPStan {
                     this.hideStatusBar();
 
                     if (data.length > 0) {
+                        console.log(results);
                         return;
                     }
                 }
 
+                let autoloadError = false;
                 const data: ICheckResult[] = results
                     .split("\n")
                     .map(x => x.substr(filePath.length + 1).trim())
@@ -318,14 +324,27 @@ export class PHPStan {
                             line++;
                         }
 
-                        const error = x.join(":");
+                        let error = x.join(":");
+
+                        // Only show this error once
+                        if (error.indexOf("not found while trying to analyse it") !== -1) {
+                            if (autoloadError) {
+                                return null;
+                            }
+
+                            error = "File probably not autoloaded correctly, some analysis is unavailable.";
+                            line = 1;
+
+                            autoloadError = true;
+                        }
+
                         return {
                             file: updatedDocument.fileName,
                             line: line,
                             msg: `[phpstan] ${error}`
                         };
                     })
-                    .filter(x => !isNaN(x.line));
+                    .filter(x => x !== null && !isNaN(x.line));
 
                 this._errors[updatedDocument.fileName] = data;
                 this._documents[updatedDocument.fileName] = updatedDocument;
@@ -408,6 +427,30 @@ export class PHPStan {
     }
 
     /**
+     * Checks if the document is in the exclude list
+     * @param document Document to check
+     */
+    private async isExcluded(document: TextDocument): Promise<boolean>
+    {
+        const workspaceFolder = workspace.getWorkspaceFolder(document.uri);
+        let excludes = this._config.excludeFiles;
+
+        if (workspaceFolder) {
+            let workspaceDir = workspaceFolder.uri.fsPath;
+
+            excludes = excludes.map(x => path.join(workspaceDir, x));
+        }
+
+        const data = await Promise.all(excludes.map(x => globAsync(x, {})));
+        const merged: string[] = [].concat.apply([], data);
+        const unique = merged.filter((elem, pos, arr) => {
+            return arr.indexOf(elem) == pos;
+        });
+
+        return unique.indexOf(document.uri.fsPath) !== -1;
+    }
+
+    /**
      * Hides the statusbar if there are no active items
      */
     private hideStatusBar() {
@@ -434,21 +477,6 @@ export class PHPStan {
         if (this._config.enabled && this._binaryPath === null) {
             window.showErrorMessage("[phpstan] Failed to find phpstan, phpstan will be disabled for this session.");
         }
-    }
-
-    private waitFor(callback: () => boolean): Promise<void> {
-        return new Promise((resolve, reject) => {
-            const tmp = () => {
-                if (callback()) {
-                    resolve();
-                    return;
-                }
-
-                setTimeout(tmp, 100);
-            };
-
-            tmp();
-        });
     }
 
     get diagnosticCollection() {
