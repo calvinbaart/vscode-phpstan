@@ -112,9 +112,9 @@ export class PHPStan {
     }
 
     /**
-     * This is where the magic happens. This method calls the PHPStan executable, 
+     * This is where the magic happens. This method calls the PHPStan executable,
      * parses the errors and outputs them to VSCode.
-     * 
+     *
      * @param updatedDocument The document to re-scan
      */
     public async updateDocument(updatedDocument: TextDocument) {
@@ -293,7 +293,7 @@ export class PHPStan {
                             case "error":
                                 window.showErrorMessage(`[phpstan] ${error.message}`);
                                 break;
-                            
+
                             case "info":
                                 window.showInformationMessage(`[phpstan] ${error.message}`);
                                 break;
@@ -464,7 +464,7 @@ export class PHPStan {
      */
     private findBinaryPath() {
         if (this._binaryPath !== null && !fs.existsSync(this._binaryPath)) {
-            window.showErrorMessage("[phpstan] Failed to find phpstan, the given path doesn't exist.");
+            window.showErrorMessage("[phpstan] Failed to find phpstan, the path " + this._binaryPath + " doesn't exist.");
 
             this._binaryPath = null;
             return;
