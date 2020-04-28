@@ -219,7 +219,7 @@ export class PHPStan {
                 `--level=${this._config.level}`,
                 ...autoload,
                 ...project,
-                "--errorFormat=raw",
+                "--error-format=raw",
                 `--memory-limit=${this._config.memoryLimit}`,
                 ...this._config.options,
                 filePath
