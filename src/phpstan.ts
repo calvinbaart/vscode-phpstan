@@ -56,8 +56,8 @@ export class PHPStan {
         this._numActive = 0;
         this._numQueued = 0;
 
-        this._command = commands.registerCommand("extension.scanForErrors", (file) => {
-            const path = file["fsPath"];
+        this._command = commands.registerCommand("extension.scanForErrors", () => {
+            const path = window.activeTextEditor.document.uri.fsPath;
 
             if (fs.lstatSync(path).isDirectory()) {
                 this.scanDirectory(path);
